@@ -54,7 +54,12 @@ func (m mapPlanModifier) PlanModifyMap(ctx context.Context, req planmodifier.Map
 	data, err := os.ReadFile(planPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			resp.PlanValue = types.MapUnknown(types.StringType)
+			if req.StateValue.IsNull() {
+				resp.PlanValue = types.MapUnknown(types.StringType)
+			} else {
+				// plan with current state if upstream planning could be skipped
+				resp.PlanValue = req.StateValue
+			}
 			return
 		}
 		resp.Diagnostics.AddError("Error reading upstream plan file", err.Error())
@@ -83,16 +88,25 @@ func (m mapPlanModifier) PlanModifyMap(ctx context.Context, req planmodifier.Map
 		}
 	}
 
-	for name, change := range plan.OutputChanges {
-		if change.Change.AfterUnknown {
+	for name, output := range plan.PlannedValues.Outputs {
+		if output.Value == nil {
 			outputElements[name] = types.StringUnknown()
 		} else {
-			valBytes, err := json.Marshal(change.Change.After)
-			if err != nil {
-				resp.Diagnostics.AddError(fmt.Sprintf("Error marshaling output '%s'", name), err.Error())
-				return
+			switch v := output.Value.(type) {
+			case string:
+				outputElements[name] = types.StringValue(v)
+			case float64, float32, int, int32, int64:
+				outputElements[name] = types.StringValue(fmt.Sprintf("%v", v))
+			case bool:
+				outputElements[name] = types.StringValue(fmt.Sprintf("%t", v))
+			default:
+				valBytes, err := json.Marshal(output.Value)
+				if err != nil {
+					resp.Diagnostics.AddError(fmt.Sprintf("Error marshaling output '%s'", name), err.Error())
+					return
+				}
+				outputElements[name] = types.StringValue(string(valBytes))
 			}
-			outputElements[name] = types.StringValue(string(valBytes))
 		}
 	}
 

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,6 +90,10 @@ func (r *TfPlanResource) Read(ctx context.Context, req resource.ReadRequest, res
 
 	outputs, err := r.readApplyOutputs(state.Path.ValueString())
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+
 		resp.Diagnostics.AddError("Error reading upstream apply outputs", err.Error())
 		return
 	}
@@ -128,22 +133,35 @@ func (r *TfPlanResource) readApplyOutputs(path string) (types.Map, error) {
 
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
-		return types.MapNull(types.StringType), err
+		return types.MapNull(types.StringType), fmt.Errorf("could not read outputs file: %w", err)
 	}
 
-	var outputs map[string]interface{}
+	var outputs map[string]OutputValue
 	if err := json.Unmarshal(data, &outputs); err != nil {
 		return types.MapNull(types.StringType), fmt.Errorf("could not unmarshal outputs: %w", err)
 	}
 
 	outputElements := make(map[string]attr.Value)
 	for k, v := range outputs {
-		vBytes, err := json.Marshal(v)
-		if err != nil {
-			return types.MapNull(types.StringType), fmt.Errorf("could not marshal output value for %s: %w", k, err)
+		switch val := v.Value.(type) {
+		case string:
+			outputElements[k] = types.StringValue(val)
+		case float64, float32, int, int32, int64:
+			outputElements[k] = types.StringValue(fmt.Sprintf("%v", val))
+		case bool:
+			outputElements[k] = types.StringValue(fmt.Sprintf("%t", val))
+		default:
+			vBytes, err := json.Marshal(v.Value)
+			if err != nil {
+				return types.MapNull(types.StringType), fmt.Errorf("could not marshal output value for %s: %w", k, err)
+			}
+			outputElements[k] = types.StringValue(string(vBytes))
 		}
-		outputElements[k] = types.StringValue(string(vBytes))
 	}
 
-	return types.MapValue(types.StringType, outputElements)
+	result, diags := types.MapValue(types.StringType, outputElements)
+	if diags.HasError() {
+		return types.MapNull(types.StringType), fmt.Errorf("could not create map value: %v", diags)
+	}
+	return result, nil
 }
