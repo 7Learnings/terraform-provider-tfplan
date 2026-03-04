@@ -1,4 +1,4 @@
-module github.com/hashicorp/terraform-provider-scaffolding-framework
+module github.com/dawg/terraform-provider-tfplan
 
 go 1.25.5
 
